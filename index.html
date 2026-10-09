@@ -10489,6 +10489,11 @@ $("#search").oninput=()=>{catalogPage=0;render()};$("#price").onchange=()=>{cata
 #catalog-pagination .catalog-page-label{font:600 10px/1 "Inter",Arial,sans-serif;letter-spacing:.08em;color:#78716C;white-space:nowrap}
 @media(max-width:600px){#catalog-pagination .catalog-page-progress{width:64px}}
 @media(max-width:600px){#catalog-pagination.catalog-pagination{margin-top:22px;gap:12px}#catalog-pagination .catalog-page-arrow{width:28px;height:28px}}
+
+/* Desktop header alignment: match the fixed-header offset to the compact masthead height. */
+@media (min-width:901px){
+  body{padding-top:65px !important;}
+}
 </style>
 
 </body>
