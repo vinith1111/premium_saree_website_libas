@@ -162,17 +162,27 @@ async function localApi(body){
     const current=await githubReadJson("data/products.json");
     const list=Array.isArray(current.value)?current.value:[];
     const id=Number(incoming.id);
-    const exists=list.some(p=>Number(p.id)===id);
-    const merged=exists?list.map(p=>Number(p.id)===id?incoming:p):[incoming,...list];
+    const existingProduct=list.find(p=>Number(p.id)===id);
+    const exists=!!existingProduct;
+    // Never backfill dates for legacy products. Preserve an existing date on edit;
+    // new products receive a real timestamp when they are first saved.
+    const savedProduct=exists
+      ? {...incoming,...(Object.prototype.hasOwnProperty.call(existingProduct,"dateAdded")?{dateAdded:existingProduct.dateAdded}:{dateAdded:undefined})}
+      : {...incoming,dateAdded:Number.isFinite(Date.parse(incoming.dateAdded||""))?new Date(incoming.dateAdded).toISOString():new Date().toISOString()};
+    const merged=exists?list.map(p=>Number(p.id)===id?savedProduct:p):[savedProduct,...list];
     if(!merged.length) throw new Error("Catalog safety check failed.");
     try{
       await githubWriteJson("data/products.json",merged,current.sha,"Update product");
     }catch(_){
       const latest=await githubReadJson("data/products.json");
       const latestList=Array.isArray(latest.value)?latest.value:[];
-      const latestMerged=latestList.some(p=>Number(p.id)===id)
-        ?latestList.map(p=>Number(p.id)===id?incoming:p)
-        :[incoming,...latestList];
+      const latestExisting=latestList.find(p=>Number(p.id)===id);
+      const retryProduct=latestExisting
+        ? {...savedProduct,...(Object.prototype.hasOwnProperty.call(latestExisting,"dateAdded")?{dateAdded:latestExisting.dateAdded}:{dateAdded:undefined})}
+        : savedProduct;
+      const latestMerged=latestExisting
+        ?latestList.map(p=>Number(p.id)===id?retryProduct:p)
+        :[retryProduct,...latestList];
       await githubWriteJson("data/products.json",latestMerged,latest.sha,"Retry product update");
     }
     return {ok:true};
@@ -379,7 +389,7 @@ function render(){
     $("#products").innerHTML='<div class="lux-empty"><strong>No pieces found</strong><br><span>Try another category or search.</span></div>';
     return;
   }
-  const q=$("#search").value.trim().toLowerCase(),pf=$("#price").value;
+  const q=$("#search").value.trim().toLowerCase(),sortBy=$("#price").value;
   let list=products.filter(p=>{
     const productCategory=String(p.category||"").trim().toLowerCase();
     const selectedCategory=String(category||"All").trim().toLowerCase();
@@ -392,16 +402,26 @@ function render(){
       String(p.name||"").toLowerCase().includes(q) ||
       productCategory.includes(q);
     return matchesCollection && matchesSearch;
-  }).filter(p=>{
-    if(!pf)return true;
-    const price=Number(p.price);
-    if(!Number.isFinite(price))return false;
-    if(pf==="0-2000")return price<2000;
-    if(pf==="2000-4000")return price>=2000&&price<4000;
-    if(pf==="4000-7000")return price>=4000&&price<7000;
-    if(pf==="7000+")return price>=7000;
-    return true;
   });
+  // Sort a filtered copy so the catalog's original order is never mutated.
+  // Undated legacy products remain visible and keep their relative order.
+  if(sortBy==="new-arrivals"){
+    list=list.map((product,index)=>({product,index,stamp:Date.parse(product.dateAdded||"")}))
+      .sort((a,b)=>{
+        const aValid=Number.isFinite(a.stamp),bValid=Number.isFinite(b.stamp);
+        if(aValid&&bValid)return b.stamp-a.stamp||a.index-b.index;
+        if(aValid!==bValid)return aValid?-1:1;
+        return a.index-b.index;
+      }).map(item=>item.product);
+  }else if(sortBy==="low-high"||sortBy==="high-low"){
+    list=list.map((product,index)=>({product,index,price:Number(product.price)}))
+      .sort((a,b)=>{
+        const aValid=Number.isFinite(a.price),bValid=Number.isFinite(b.price);
+        if(aValid&&bValid)return (sortBy==="low-high"?a.price-b.price:b.price-a.price)||a.index-b.index;
+        if(aValid!==bValid)return aValid?-1:1;
+        return a.index-b.index;
+      }).map(item=>item.product);
+  }
   if(!list.length){
     grid.innerHTML='<div class="lux-empty"><strong>No pieces found</strong><br><span>Try another category or search.</span><br><button type="button" class="btn dark" id="clearCatalogFilters">CLEAR FILTERS</button></div>';
     const clear=$("#clearCatalogFilters");
@@ -612,6 +632,7 @@ async function saveProduct(id){
     const p={
       ...(existing||{}),
       id:id?Number(id):nextProductId(),
+      ...(!existing?{dateAdded:new Date().toISOString()}:{}),
       name,
       category:categoryValue,
       price,
